@@ -28,14 +28,20 @@ async fn handle_connection(req: Request<Body>, snack: Arc<Snack>) -> Result<Resp
     let (head, body) = req.into_parts();
     let slack_headers = match slack::extract_slack_headers(&head.headers) {
         Ok(v) => v,
-        _ => return Ok(Response::new("Invalid".into()))
+        _ => {
+            warn!("Request did not have headers");
+            return Ok(Response::new("Invalid".into()))
+        }
     };
     
     let uri =  head.uri.path_and_query().map(|x| x.as_str()).unwrap_or("");
 
     let body = match hyper::body::to_bytes(body).await {
         Ok(v) => v,
-        _ => return Ok(Response::new("Invalid".into())),
+        _ => {
+            error!("Could not fetch body of request");
+            return Ok(Response::new("Invalid".into()))
+        },
     };
 
     let snack_request = SnackRequest {
@@ -48,7 +54,10 @@ async fn handle_connection(req: Request<Body>, snack: Arc<Snack>) -> Result<Resp
     // TODO: Change this to a 400.
     let service = match snack.verify_request(&snack_request) {
         Ok(s) => s,
-        _ => return Ok(Response::new("Invalid".into())),
+        _ => {
+            error!("Could not validate slack request even though we had the correct headers");
+            return Ok(Response::new("Invalid".into()))
+        },
     };
 
     let (_, destination_uri) = utils::parse_resource(uri);
@@ -63,7 +72,10 @@ async fn handle_connection(req: Request<Body>, snack: Arc<Snack>) -> Result<Resp
 
     let proxy_request = match proxy_request_builder.body(Body::from(body)) {
         Ok(v) => snack.client.request(v),
-        _ => return Ok(Response::new("Invalid".into())),
+        Err(e) => {
+            error!("Could not build request to backend: {:?}", e);
+            return Ok(Response::new("Invalid".into()))
+        },
     };
     
     // If something takes longer than 2500 millis, stop waiting and send Slack an error.
