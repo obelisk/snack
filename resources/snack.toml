@@ -1,0 +1,4 @@
+[services."snacktest"]
+secret = "7e18161980f0c7285f72e940e71c90b7"
+backend = "localhost"
+backend_port = 7445
