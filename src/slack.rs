@@ -24,30 +24,6 @@ pub struct SlackRequestHeaders<'a> {
     pub signature_timestamp: &'a str,
 }
 
-/*
-impl<'a> From<&'a HeaderMap> for SlackRequestHeaders<'a> {
-    fn from(headers: &HeaderMap) -> Self {
-        let signature = headers.get("X-Slack-Signature");
-        let signature_timestamp = headers.get("X-Slack-Request-Timestamp");
-    
-        let (signature, signature_timestamp) = match (signature, signature_timestamp) {
-            (Some(sig), Some(sig_ts)) => (sig, sig_ts),
-            _ => return Err(SnackError::RequestError),
-        };
-    
-        let (signature, signature_timestamp) = match (signature.to_str(), signature_timestamp.to_str()) {
-            (Ok(sig), Ok(sig_ts)) => (sig, sig_ts),
-            _ => return Err(SnackError::RequestError),
-        };
-    
-        Self {
-            signature,
-            signature_timestamp,
-        }
-    }
-}
-*/
-
 pub fn extract_slack_headers(headers: &HeaderMap) -> Result<SlackRequestHeaders, SnackError> {
     let signature = headers.get("X-Slack-Signature");
     let signature_timestamp = headers.get("X-Slack-Request-Timestamp");

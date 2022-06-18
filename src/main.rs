@@ -3,20 +3,19 @@
 extern crate base64;
 extern crate hyper;
 
-use snack::{SnackRequest, slack};
-use snack::config::{configure, Configuration};
+use snack::{SnackRequest, slack, Snack, utils};
+use snack::config::{configure};
 
-use std::collections::HashMap;
 use std::str;
 use std::convert::Infallible;
 use std::sync::Arc;
+use std::time::Duration;
+
+use tokio::time::timeout;
 
 use hyper::service::{make_service_fn, service_fn};
-use hyper::http::request::Parts;
-use hyper::{Client, Body, Request, Response, Server};
-use hyper::{StatusCode};
+use hyper::{StatusCode, Body, Request, Response, Server, Client};
 
-use serde::{Deserialize, Serialize};
 
 pub fn create_internal_server_error(msg: &str) -> Response<Body> {
     let resp = Response::new("Internal Server Error");
@@ -25,7 +24,7 @@ pub fn create_internal_server_error(msg: &str) -> Response<Body> {
     return Response::from_parts(parts, Body::from(msg.to_string()));
 }
 
-async fn handle_connection(mut req: Request<Body>, config: Arc<Configuration>) -> Result<Response<Body>, Infallible> {
+async fn handle_connection(req: Request<Body>, snack: Arc<Snack>) -> Result<Response<Body>, Infallible> {
     let (head, body) = req.into_parts();
     let slack_headers = match slack::extract_slack_headers(&head.headers) {
         Ok(v) => v,
@@ -45,22 +44,37 @@ async fn handle_connection(mut req: Request<Body>, config: Arc<Configuration>) -
         uri,
     };
 
-    match config.verify_request(&snack_request) {
-        Ok(_) => Ok(Response::new("Hello, World".into())),
-        Err(_) => Ok(Response::new("Invalid".into())),
+    // If we can't verify the request, return invalid and bail.
+    // TODO: Change this to a 400.
+    let service = match snack.verify_request(&snack_request) {
+        Ok(s) => s,
+        _ => return Ok(Response::new("Invalid".into())),
+    };
+
+    let (_, destination_uri) = utils::parse_resource(uri);
+
+    let service_address = format!("http://{}:{}{}", service.backend, service.backend_port, destination_uri);
+
+    let proxy_request_builder = Request::builder()
+        .header("X-Snack-Forwarded", "true")
+        .uri(service_address)
+        .method(&head.method)
+        .version(head.version);
+
+    let proxy_request = match proxy_request_builder.body(Body::from(body)) {
+        Ok(v) => snack.client.request(v),
+        _ => return Ok(Response::new("Invalid".into())),
+    };
+    
+    // If something takes longer than 2500 millis, stop waiting and send Slack an error.
+    match timeout(Duration::from_millis(2500), proxy_request).await {
+        Ok(Ok(resp)) => Ok(resp),
+        Ok(Err(_)) => return Ok(Response::new("Could not process your request. Please contact the service owner".into())),
+        Err(_) => return Ok(Response::new("Service took too long to respond. Please contact service owner".into())),
     }
 
 }
 
-/*
-    // Extract the two Slack headers we need to validate this request is coming
-    // from Slack. This is proved by possesion of a shared HMAC key.
-    let (slack_signature, slack_timestamp) = match (request.headers.get("X-Slack-Signature"), request.headers.get("X-Slack-Request-Timestamp")) {
-        (Some(signature), Some(timestamp)) => (signature, timestamp),
-        _ => return Err(SnackError::RequestError),
-    };
-
-*/
 
 #[tokio::main]
 async fn main() {
@@ -69,21 +83,26 @@ async fn main() {
     info!(target: "snack", "Validating Configuration");
 
     let config = configure().await.unwrap();
-    let config = Arc::new(config);
+    let snack = Snack {
+        config,
+        client: Client::new(),
+    };
+
+    let snack = Arc::new(snack);
 
     info!(target: "snack", "Providing routing for:");
 
-    for (k, _v) in config.services.iter() {
+    for (k, _v) in snack.config.services.iter() {
         info!("\t{}", k);
     }
 
     let addr = ([0, 0, 0, 0], 7292).into();
 
     let make_svc = make_service_fn(move |_| {
-        let config = config.clone();
+        let snack = snack.clone();
         async move {
             return Ok::<_, hyper::Error>(service_fn(move |req| 
-                handle_connection(req, config.clone())
+                handle_connection(req, snack.clone())
             ))
         }
     });
