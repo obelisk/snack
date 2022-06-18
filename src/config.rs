@@ -3,6 +3,8 @@ use serde::Deserialize;
 
 use std::collections::HashMap;
 
+use crate::{SnackRequest, SnackError, utils, slack};
+
 #[derive(Deserialize)]
 pub struct Service {
     pub secret: String,
@@ -20,6 +22,30 @@ pub enum ConfigurationError {
     FileError,
     ParsingError,
 }
+
+
+impl Configuration {
+    pub fn verify_request(&self, request: &SnackRequest) -> Result<(), SnackError> {
+        // Find the service that we're verifying the request for. Snack uses the
+        // first part of the URI as the service indicator.
+        let (service, _) = utils::parse_resource(request.uri);
+    
+        // If we don't have a key for this service, error out because we will not
+        // be able to validate the headers.
+        let service = if let Some(secret) = self.services.get(service) {
+            secret
+        } else {
+            return Err(SnackError::UnknownService);
+        };
+    
+        if !slack::verify_signature(&request.slack_headers, &service.secret, request.body) {
+            return Err(SnackError::VerificationError);
+        }
+    
+        Ok(())
+    }
+}
+
 
 pub async fn configure() -> Result<Configuration, ConfigurationError> {
     let matches = Command::new("Snack - A simple Slack command router")

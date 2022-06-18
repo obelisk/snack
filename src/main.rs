@@ -3,7 +3,8 @@
 extern crate base64;
 extern crate hyper;
 
-use snack::config::configure;
+use snack::{SnackRequest, slack};
+use snack::config::{configure, Configuration};
 
 use std::collections::HashMap;
 use std::str;
@@ -24,9 +25,42 @@ pub fn create_internal_server_error(msg: &str) -> Response<Body> {
     return Response::from_parts(parts, Body::from(msg.to_string()));
 }
 
-async fn hello_world(_req: Request<Body>) -> Result<Response<Body>, Infallible> {
-    Ok(Response::new("Hello, World".into()))
+async fn handle_connection(mut req: Request<Body>, config: Arc<Configuration>) -> Result<Response<Body>, Infallible> {
+    let (head, body) = req.into_parts();
+    let slack_headers = match slack::extract_slack_headers(&head.headers) {
+        Ok(v) => v,
+        _ => return Ok(Response::new("Invalid".into()))
+    };
+    
+    let uri =  head.uri.path_and_query().map(|x| x.as_str()).unwrap_or("");
+
+    let body = match hyper::body::to_bytes(body).await {
+        Ok(v) => v,
+        _ => return Ok(Response::new("Invalid".into())),
+    };
+
+    let snack_request = SnackRequest {
+        slack_headers,
+        body: &body,
+        uri,
+    };
+
+    match config.verify_request(&snack_request) {
+        Ok(_) => Ok(Response::new("Hello, World".into())),
+        Err(_) => Ok(Response::new("Invalid".into())),
+    }
+
 }
+
+/*
+    // Extract the two Slack headers we need to validate this request is coming
+    // from Slack. This is proved by possesion of a shared HMAC key.
+    let (slack_signature, slack_timestamp) = match (request.headers.get("X-Slack-Signature"), request.headers.get("X-Slack-Request-Timestamp")) {
+        (Some(signature), Some(timestamp)) => (signature, timestamp),
+        _ => return Err(SnackError::RequestError),
+    };
+
+*/
 
 #[tokio::main]
 async fn main() {
@@ -35,6 +69,7 @@ async fn main() {
     info!(target: "snack", "Validating Configuration");
 
     let config = configure().await.unwrap();
+    let config = Arc::new(config);
 
     info!(target: "snack", "Providing routing for:");
 
@@ -44,11 +79,13 @@ async fn main() {
 
     let addr = ([0, 0, 0, 0], 7292).into();
 
-    // A `Service` is needed for every connection, so this
-    // creates one from our `hello_world` function.
-    let make_svc = make_service_fn(|_conn| async {
-        // service_fn converts our function into a `Service`
-        Ok::<_, Infallible>(service_fn(hello_world))
+    let make_svc = make_service_fn(move |_| {
+        let config = config.clone();
+        async move {
+            return Ok::<_, hyper::Error>(service_fn(move |req| 
+                handle_connection(req, config.clone())
+            ))
+        }
     });
 
     let server = Server::bind(&addr).serve(make_svc);
