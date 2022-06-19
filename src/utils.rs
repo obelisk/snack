@@ -16,10 +16,10 @@ pub fn parse_post_params(body: &str) -> HashMap<&str, &str> {
         let parts: Vec<&str> = field.split("=").collect();
         match parts.len() {
             2 => {
-                trace!(target: "slackruster", "Post Param: {} : {}", parts[0], parts[1]);
+                trace!(target: "snack", "Post Param: {} : {}", parts[0], parts[1]);
                 fields.insert(parts[0], parts[1]);
             },
-            _ => debug!(target: "slackruster", "\"{}\" doesn't have exactly two parts, not processing", field),
+            _ => debug!(target: "snack", "\"{}\" doesn't have exactly two parts, not processing", field),
         }
 
     }
