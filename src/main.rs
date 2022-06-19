@@ -127,5 +127,5 @@ async fn main() {
         eprintln!("server error: {}", e);
     }
 
-    info!(target: "slackruster", "Goodbye");
+    info!(target: "snack", "Goodbye");
 }
